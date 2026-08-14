@@ -257,6 +257,7 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 🛡️ *SECURITY SYSTEMS:*
 ┃ 👁️ _*Auto Status*_  ⟡ [ACTIVE]
 ┃ 📵 _*Call Shield*_  ⟡ [ACTIVE]
+┃ 🛡️ _*Anti-Delete*_ ⟡ [ACTIVE]
 ───────────────────
 🌐 *CONTACT MASTER*
 http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
@@ -299,7 +300,21 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
         }
     });
 
-    // 5. Call Shield Listener
+    // --- 5. Anti-Delete Listener ---
+    sock.ev.on('messages.update', async (updates) => {
+        for (const update of updates) {
+            if (update.update && update.update.message === null) {
+                const remoteJid = update.key.remoteJid;
+                try {
+                    await sock.sendMessage(remoteJid, { 
+                        text: '🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n_Someone deleted a message!_ 🗑️' 
+                    });
+                } catch (e) {}
+            }
+        }
+    });
+
+    // --- 6. Call Shield Listener ---
     sock.ev.on('call', async (calls) => {
         for (const call of calls) {
             if (call.status === 'offer') {
