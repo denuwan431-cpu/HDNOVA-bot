@@ -42,7 +42,7 @@ const useMongoAuthState = async () => {
         await AuthModel.findByIdAndUpdate(
             id,
             { data: JSON.parse(jsonString) },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
     };
 
@@ -113,8 +113,6 @@ const useMongoAuthState = async () => {
 };
 
 // --- 3. WhatsApp Bot Main Logic ---
-const startTime = Date.now(); // Track bot uptime
-
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMongoAuthState();
 
@@ -124,9 +122,9 @@ async function connectToWhatsApp() {
         logger: pino({ level: 'silent' })
     });
 
-    const phoneNumber = "94706647016"; // ඔබේ අංකය නිවැරදිව යොදා ඇත
+    const phoneNumber = "94706647016"; // ඔබේ අංකය
     const ownerJid = `${phoneNumber}@s.whatsapp.net`;
-    const messageStore = new Map(); // Store messages temporarily for Anti-Delete
+    const messageStore = new Map();
 
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
@@ -138,7 +136,7 @@ async function connectToWhatsApp() {
             } catch (error) {
                 console.error("Error requesting pairing code:", error);
             }
-        }, 3000);
+        }, 5000); // තත්පර 5ක ප්‍රමාදයක් ලබා දී ඇත
     }
 
     sock.ev.on('connection.update', async (update) => {
@@ -163,8 +161,8 @@ async function connectToWhatsApp() {
     // --- Helper function for Date and Time ---
     function getDateTime() {
         const now = new Date();
-        const date = now.toLocaleDateString('en-GB'); // DD/MM/YYYY
-        const time = now.toLocaleTimeString('en-GB', { hour12: false }); // HH:MM:SS
+        const date = now.toLocaleDateString('en-GB'); 
+        const time = now.toLocaleTimeString('en-GB', { hour12: false }); 
         return { date, time };
     }
 
@@ -173,7 +171,6 @@ async function connectToWhatsApp() {
         const m = messages[0];
         if (!m.message) return;
 
-        // 1. Message Store for Anti-Delete
         if (m.key && m.key.id) {
             messageStore.set(m.key.id, m);
             if (messageStore.size > 500) {
@@ -182,7 +179,6 @@ async function connectToWhatsApp() {
             }
         }
 
-        // 2. Status Auto-View
         if (m.key && m.key.remoteJid === 'status@broadcast') {
             const participant = m.key.participant || m.participant;
             try {
@@ -191,31 +187,20 @@ async function connectToWhatsApp() {
                     id: m.key.id,
                     participant: participant
                 }]);
-                console.log(`Status viewed successfully from: ${participant}`);
-            } catch (error) {
-                console.log('Error viewing status:', error);
-            }
+            } catch (error) {}
         }
 
-        // 3. Bot Commands (.ping, .alive, .tagall, .menu) - OWNER ONLY CHECK
         const from = m.key.remoteJid;
         const body = m.message.conversation || m.message.extendedTextMessage?.text || "";
         const isOwner = m.key.fromMe || (m.key.participant === ownerJid) || (from === ownerJid);
 
         const isCommand = body.startsWith('.') || body.startsWith('!') || body.startsWith('/');
-        if (isCommand) {
-            if (!isOwner) return; // Ignore commands from others completely
-        }
+        if (isCommand && !isOwner) return;
 
-        // --- Reaction Helper Function ---
         const react = async (emoji) => {
             try {
-                await sock.sendMessage(from, {
-                    react: { text: emoji, key: m.key }
-                });
-            } catch (e) {
-                console.log('Reaction error:', e);
-            }
+                await sock.sendMessage(from, { react: { text: emoji, key: m.key } });
+            } catch (e) {}
         };
 
         // .ping Command
@@ -251,10 +236,7 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 ┃ ® *POWERED BY HDNOVA*
 > _HDNOVA-OFC - Cyber System_`.trim();
 
-            await sock.sendMessage(from, { 
-                image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, 
-                caption: aliveText 
-            }, { quoted: m });
+            await sock.sendMessage(from, { image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, caption: aliveText }, { quoted: m });
         }
 
         // .menu Command
@@ -288,13 +270,10 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 ┃ ® *POWERED BY HDNOVA*
 > _HDNOVA-OFC - Cyber System_`.trim();
 
-            await sock.sendMessage(from, { 
-                image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, 
-                caption: menuText 
-            }, { quoted: m });
+            await sock.sendMessage(from, { image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, caption: menuText }, { quoted: m });
         }
 
-        // .tagall Command (Group Tagging)
+        // .tagall Command
         if (body.startsWith('.tagall')) {
             if (!from.endsWith('@g.us')) {
                 await react('❌');
@@ -346,27 +325,21 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
                         await sock.sendMessage(ownerJid, {
                             text: `🚨 *__HDNOVA ANTI-DELETE__* 🚨\n\n👤 *Sender Number:* _+${senderNumber}_\n💬 *Chat Type:* _${chatName}_\n\n📝 *Deleted Message:* \n> ${messageText}`
                         });
-                        console.log(`Captured deleted message from ${senderNumber}`);
-                    } catch (err) {
-                        console.log('Error sending anti-delete notification:', err);
-                    }
+                    } catch (err) {}
                 }
             }
         }
     });
 
-    // 6. Auto-Reply Message on Incoming Call
+    // 6. Call Shield Listener
     sock.ev.on('call', async (calls) => {
         for (const call of calls) {
             if (call.status === 'offer') {
                 try {
-                    console.log(`Call received from: ${call.from}`);
                     await sock.sendMessage(call.from, { 
                         text: '📵 *__HDNOVA CALL SHIELD__*\n\n_Calls are not allowed! Please send a text message only._ 💬' 
                     });
-                } catch (error) {
-                    console.log('Error sending message for call:', error);
-                }
+                } catch (error) {}
             }
         }
     });
