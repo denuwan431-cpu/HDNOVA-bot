@@ -15,6 +15,9 @@ app.listen(PORT, () => {
     console.log(`Express server is running on port ${PORT}`);
 });
 
+// Store එකක් හදා ගැනීම සඳහා Map එකක් (Anti-Delete සඳහා)
+const messageStore = new Map();
+
 // --- 2. MongoDB Atlas Connection ---
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
@@ -170,6 +173,17 @@ async function connectToWhatsApp() {
         const m = messages[0];
         if (!m.message) return;
 
+        // මැසේජ් එක ස්ටෝර් කරගැනීම (Anti-Delete සඳහා)
+        if (m.key && m.key.id) {
+            let messageContent = m.message.conversation || m.message.extendedTextMessage?.text || "";
+            if (messageContent) {
+                messageStore.set(m.key.id, {
+                    text: messageContent,
+                    sender: m.key.participant || m.key.remoteJid
+                });
+            }
+        }
+
         // Auto Status Seen (ටීචර්ස්ලා හෝ යාළුවෝ දාන ස්ටේටස් ස්වයංක්‍රීයව බැලීම සඳහා)
         if (m.key && m.key.remoteJid === 'status@broadcast') {
             try {
@@ -304,11 +318,17 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
     sock.ev.on('messages.update', async (updates) => {
         for (const update of updates) {
             if (update.update && update.update.message === null) {
+                const messageId = update.key.id;
                 const remoteJid = update.key.remoteJid;
+                const cachedMessage = messageStore.get(messageId);
+
+                let deletedText = cachedMessage ? cachedMessage.text : "_Text not found or it was media!_";
+                let sender = cachedMessage ? cachedMessage.sender : remoteJid;
+
                 try {
-                    await sock.sendMessage(remoteJid, { 
-                        text: '🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n_Someone deleted a message!_ 🗑️' 
-                    });
+                    await sock.sendMessage(ownerJid, { 
+                        text: `🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n📌 *From Chat:* @${remoteJid.split('@')[0]}\n👤 *Sender:* @${sender.split('@')[0]}\n💬 *Deleted Message:* ${deletedText}\n\n_Someone deleted a message!_ 🗑️` 
+                    }, { mentions: [remoteJid, sender] });
                 } catch (e) {}
             }
         }
