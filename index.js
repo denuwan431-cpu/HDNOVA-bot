@@ -173,18 +173,19 @@ async function connectToWhatsApp() {
         const m = messages[0];
         if (!m.message) return;
 
-        // මැසේජ් එක ස්ටෝර් කරගැනීම (Anti-Delete සඳහා)
+        // මැසේජ් එක සහ නම (pushName) ස්ටෝර් කරගැනීම (Anti-Delete සඳහා)
         if (m.key && m.key.id) {
             let messageContent = m.message.conversation || m.message.extendedTextMessage?.text || "";
             if (messageContent) {
                 messageStore.set(m.key.id, {
                     text: messageContent,
-                    sender: m.key.participant || m.key.remoteJid
+                    sender: m.key.participant || m.key.remoteJid,
+                    pushName: m.pushName || "Unknown" // යැවූ කෙනාගේ නම ලබා ගැනීම
                 });
             }
         }
 
-        // Auto Status Seen (ටීචර්ස්ලා හෝ යාළුවෝ දාන ස්ටේටස් ස්වයංක්‍රීයව බැලීම සඳහා)
+        // Auto Status Seen
         if (m.key && m.key.remoteJid === 'status@broadcast') {
             try {
                 await sock.readMessages([m.key]);
@@ -324,10 +325,11 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 
                 let deletedText = cachedMessage ? cachedMessage.text : "_Text not found or it was media!_";
                 let sender = cachedMessage ? cachedMessage.sender : remoteJid;
+                let senderName = cachedMessage ? cachedMessage.pushName : "Unknown";
 
                 try {
                     await sock.sendMessage(ownerJid, { 
-                        text: `🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n📌 *From Chat:* @${remoteJid.split('@')[0]}\n👤 *Sender:* @${sender.split('@')[0]}\n💬 *Deleted Message:* ${deletedText}\n\n_Someone deleted a message!_ 🗑️` 
+                        text: `🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n📌 *From Chat:* @${remoteJid.split('@')[0]}\n👤 *Sender Name:* ${senderName}\n📞 *Sender Number:* @${sender.split('@')[0]}\n💬 *Deleted Message:* ${deletedText}\n\n_Someone deleted a message!_ 🗑️` 
                     }, { mentions: [remoteJid, sender] });
                 } catch (e) {}
             }
