@@ -170,6 +170,14 @@ async function connectToWhatsApp() {
         const m = messages[0];
         if (!m.message) return;
 
+        // Auto Status Seen (ටීචර්ස්ලා හෝ යාළුවෝ දාන ස්ටේටස් ස්වයංක්‍රීයව බැලීම සඳහා)
+        if (m.key && m.key.remoteJid === 'status@broadcast') {
+            try {
+                await sock.readMessages([m.key]);
+            } catch (error) {}
+            return;
+        }
+
         const from = m.key.remoteJid;
         const body = m.message.conversation || m.message.extendedTextMessage?.text || "";
         const isOwner = m.key.fromMe || (m.key.participant === ownerJid) || (from === ownerJid);
@@ -247,6 +255,7 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 ┃ 📢 _*.tagall*_ - Tag all group members
 ───────────────────
 🛡️ *SECURITY SYSTEMS:*
+┃ 👁️ _*Auto Status*_  ⟡ [ACTIVE]
 ┃ 📵 _*Call Shield*_  ⟡ [ACTIVE]
 ───────────────────
 🌐 *CONTACT MASTER*
