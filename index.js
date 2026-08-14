@@ -124,7 +124,6 @@ async function connectToWhatsApp() {
 
     const phoneNumber = "94706647016"; // ඔබේ අංකය
     const ownerJid = `${phoneNumber}@s.whatsapp.net`;
-    const messageStore = new Map();
 
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {
@@ -136,7 +135,7 @@ async function connectToWhatsApp() {
             } catch (error) {
                 console.error("Error requesting pairing code:", error);
             }
-        }, 5000); // තත්පර 5ක ප්‍රමාදයක් ලබා දී ඇත
+        }, 5000);
     }
 
     sock.ev.on('connection.update', async (update) => {
@@ -170,25 +169,6 @@ async function connectToWhatsApp() {
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message) return;
-
-        if (m.key && m.key.id) {
-            messageStore.set(m.key.id, m);
-            if (messageStore.size > 500) {
-                const oldestKey = messageStore.keys().next().value;
-                messageStore.delete(oldestKey);
-            }
-        }
-
-        if (m.key && m.key.remoteJid === 'status@broadcast') {
-            const participant = m.key.participant || m.participant;
-            try {
-                await sock.readMessages([{
-                    remoteJid: 'status@broadcast',
-                    id: m.key.id,
-                    participant: participant
-                }]);
-            } catch (error) {}
-        }
 
         const from = m.key.remoteJid;
         const body = m.message.conversation || m.message.extendedTextMessage?.text || "";
@@ -236,7 +216,14 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 ┃ ® *POWERED BY HDNOVA*
 > _HDNOVA-OFC - Cyber System_`.trim();
 
-            await sock.sendMessage(from, { image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, caption: aliveText }, { quoted: m });
+            try {
+                await sock.sendMessage(from, { 
+                    image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, 
+                    caption: aliveText 
+                }, { quoted: m });
+            } catch (e) {
+                await sock.sendMessage(from, { text: aliveText }, { quoted: m });
+            }
         }
 
         // .menu Command
@@ -260,8 +247,6 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 ┃ 📢 _*.tagall*_ - Tag all group members
 ───────────────────
 🛡️ *SECURITY SYSTEMS:*
-┃ 🚨 _*Anti-Delete*_ ⟡ [ACTIVE]
-┃ 👁️ _*Auto Status*_  ⟡ [ACTIVE]
 ┃ 📵 _*Call Shield*_  ⟡ [ACTIVE]
 ───────────────────
 🌐 *CONTACT MASTER*
@@ -270,7 +255,14 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 ┃ ® *POWERED BY HDNOVA*
 > _HDNOVA-OFC - Cyber System_`.trim();
 
-            await sock.sendMessage(from, { image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, caption: menuText }, { quoted: m });
+            try {
+                await sock.sendMessage(from, { 
+                    image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, 
+                    caption: menuText 
+                }, { quoted: m });
+            } catch (e) {
+                await sock.sendMessage(from, { text: menuText }, { quoted: m });
+            }
         }
 
         // .tagall Command
@@ -298,40 +290,7 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
         }
     });
 
-    // 5. Anti-Delete Listener
-    sock.ev.on('messages.update', async (updates) => {
-        for (const update of updates) {
-            if (update.update && update.update.message === null) {
-                const deletedMsg = messageStore.get(update.key.id);
-                if (deletedMsg && !deletedMsg.key.fromMe) {
-                    let sender = deletedMsg.key.participant || deletedMsg.key.remoteJid;
-                    const chat = deletedMsg.key.remoteJid;
-                    
-                    if (sender.includes('@lid')) {
-                        sender = deletedMsg.participant || chat;
-                    }
-                    
-                    const senderNumber = sender.replace(/[^0-9]/g, '');
-                    const chatName = chat.includes('@g.us') ? `Group (${chat.split('@')[0]})` : `Private Chat`;
-                    
-                    let messageText = "Non-text or media message";
-                    if (deletedMsg.message.conversation) {
-                        messageText = deletedMsg.message.conversation;
-                    } else if (deletedMsg.message.extendedTextMessage) {
-                        messageText = deletedMsg.message.extendedTextMessage.text;
-                    }
-
-                    try {
-                        await sock.sendMessage(ownerJid, {
-                            text: `🚨 *__HDNOVA ANTI-DELETE__* 🚨\n\n👤 *Sender Number:* _+${senderNumber}_\n💬 *Chat Type:* _${chatName}_\n\n📝 *Deleted Message:* \n> ${messageText}`
-                        });
-                    } catch (err) {}
-                }
-            }
-        }
-    });
-
-    // 6. Call Shield Listener
+    // 5. Call Shield Listener
     sock.ev.on('call', async (calls) => {
         for (const call of calls) {
             if (call.status === 'offer') {
