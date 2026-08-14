@@ -22,10 +22,7 @@ if (!mongoURI) {
     process.exit(1);
 }
 
-mongoose.connect(mongoURI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-}).then(() => {
+mongoose.connect(mongoURI).then(() => {
     console.log('Connected to MongoDB Atlas successfully!');
     connectToWhatsApp();
 }).catch(err => {
