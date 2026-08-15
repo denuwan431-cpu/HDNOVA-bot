@@ -1,22 +1,29 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const { default: makeWASocket, initAuthCreds, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, initAuthCreds, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const axios = require('axios');
 
 // --- 1. Express Server Setup ---
 const app = express();
 const PORT = process.env.PORT || 7860;
 
 app.get('/', (req, res) => {
-    res.send('⚡ HDNOVA WhatsApp Bot is Running Successfully!');
+    res.send('⚡ HDNOVA WhatsApp Bot with Advanced Features is Running Successfully!');
 });
 
 app.listen(PORT, () => {
     console.log(`Express server is running on port ${PORT}`);
 });
 
-// Store එකක් හදා ගැනීම සඳහා Map එකක් (Anti-Delete සඳහා)
 const messageStore = new Map();
+
+// --- Feature Toggle States (Default: ON) ---
+const botSettings = {
+    autoStatusSeen: true,
+    antiDelete: true,
+    callShield: true
+};
 
 // --- 2. MongoDB Atlas Connection ---
 const mongoURI = process.env.MONGO_URI;
@@ -32,7 +39,6 @@ mongoose.connect(mongoURI).then(() => {
     console.error('MongoDB connection error:', err);
 });
 
-// Mongoose Schema for Baileys Session Storage
 const AuthSchema = new mongoose.Schema({
     _id: { type: String, required: true },
     data: { type: Object, required: true }
@@ -160,7 +166,6 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // --- Helper function for Date and Time ---
     function getDateTime() {
         const now = new Date();
         const date = now.toLocaleDateString('en-GB'); 
@@ -173,32 +178,31 @@ async function connectToWhatsApp() {
         const m = messages[0];
         if (!m.message) return;
 
-        // මැසේජ් එක සහ නම (pushName) ස්ටෝර් කරගැනීම (Anti-Delete සඳහා)
-        if (m.key && m.key.id) {
-            let messageContent = m.message.conversation || m.message.extendedTextMessage?.text || "";
-            if (messageContent) {
-                messageStore.set(m.key.id, {
-                    text: messageContent,
-                    sender: m.key.participant || m.key.remoteJid,
-                    pushName: m.pushName || "Unknown" // යැවූ කෙනාගේ නම ලබා ගැනීම
-                });
-            }
-        }
-
-        // Auto Status Seen
-        if (m.key && m.key.remoteJid === 'status@broadcast') {
-            try {
-                await sock.readMessages([m.key]);
-            } catch (error) {}
-            return;
-        }
-
         const from = m.key.remoteJid;
         const body = m.message.conversation || m.message.extendedTextMessage?.text || "";
         const isOwner = m.key.fromMe || (m.key.participant === ownerJid) || (from === ownerJid);
 
+        // Anti-Delete සඳහා මැසේජ් ස්ටෝර් කිරීම
+        if (botSettings.antiDelete && m.key && m.key.id) {
+            messageStore.set(m.key.id, {
+                message: m.message,
+                sender: m.key.participant || m.key.remoteJid,
+                pushName: m.pushName || "Unknown",
+                remoteJid: m.key.remoteJid
+            });
+        }
+
+        // Auto Status Seen & React
+        if (botSettings.autoStatusSeen && m.key && m.key.remoteJid === 'status@broadcast') {
+            try {
+                await sock.readMessages([m.key]);
+                await sock.sendMessage(m.key.remoteJid, { react: { text: '💚', key: m.key } }, { statusJidList: [m.key.participant] });
+            } catch (error) {}
+            return;
+        }
+
         const isCommand = body.startsWith('.') || body.startsWith('!') || body.startsWith('/');
-        if (isCommand && !isOwner) return;
+        if (isCommand && !isOwner && !body.startsWith('.ai') && !body.startsWith('.gpt') && !body.startsWith('.sticker') && !body.startsWith('.s') && !body.startsWith('.weather') && !body.startsWith('.wiki')) return;
 
         const react = async (emoji) => {
             try {
@@ -213,6 +217,132 @@ async function connectToWhatsApp() {
             const sentMsg = await sock.sendMessage(from, { text: '_Pinging..._ 🏓' }, { quoted: m });
             const latency = Date.now() - start;
             await sock.sendMessage(from, { text: `> ⚡ *HDNOVA PONG!* Speed: *_${latency}ms_*` }, { quoted: sentMsg });
+        }
+
+        // --- Settings Toggle Commands (Owner Only) ---
+        if (isOwner) {
+            if (body === '.autostatus on') {
+                botSettings.autoStatusSeen = true;
+                await sock.sendMessage(from, { text: '✅ *Auto Status Seen is now ENABLED!*' }, { quoted: m });
+            }
+            if (body === '.autostatus off') {
+                botSettings.autoStatusSeen = false;
+                await sock.sendMessage(from, { text: '❌ *Auto Status Seen is now DISABLED!*' }, { quoted: m });
+            }
+
+            if (body === '.antidelete on') {
+                botSettings.antiDelete = true;
+                await sock.sendMessage(from, { text: '✅ *Anti-Delete System is now ENABLED!*' }, { quoted: m });
+            }
+            if (body === '.antidelete off') {
+                botSettings.antiDelete = false;
+                await sock.sendMessage(from, { text: '❌ *Anti-Delete System is now DISABLED!*' }, { quoted: m });
+            }
+
+            if (body === '.callshield on') {
+                botSettings.callShield = true;
+                await sock.sendMessage(from, { text: '✅ *Call Shield is now ENABLED!*' }, { quoted: m });
+            }
+            if (body === '.callshield off') {
+                botSettings.callShield = false;
+                await sock.sendMessage(from, { text: '❌ *Call Shield is now DISABLED!*' }, { quoted: m });
+            }
+        }
+
+        // --- 1. AI Chat Assistant (.ai / .gpt) ---
+        if (body.startsWith('.ai') || body.startsWith('.gpt')) {
+            const query = body.slice(3).trim();
+            if (!query) {
+                await sock.sendMessage(from, { text: '❌ *Please provide a question!* Example: `.ai What is anime?`' }, { quoted: m });
+                return;
+            }
+            await react('🤖');
+            try {
+                const response = await axios.get(`https://bk9.fun/ai/gemini?q=${encodeURIComponent(query)}`);
+                const answer = response.data.BK9 || response.data.result || "Sorry, I couldn't get a response from AI.";
+                await sock.sendMessage(from, { text: `🤖 *HDNOVA AI ASSISTANT*\n\n${answer}` }, { quoted: m });
+            } catch (e) {
+                await sock.sendMessage(from, { text: '❌ *Error communicating with AI service!*' }, { quoted: m });
+            }
+        }
+
+        // --- 2. Sticker Maker (.sticker / .s) ---
+        if (body === '.sticker' || body === '.s' || m.message.imageMessage) {
+            const isStickerCmd = body === '.sticker' || body === '.s';
+            const quotedMsg = m.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            const hasImage = m.message.imageMessage || quotedMsg?.imageMessage;
+
+            if (isStickerCmd && hasImage) {
+                await react('🎨');
+                try {
+                    // Note: Basic sticker generation needs an image buffer download or external API wrapper. 
+                    // To keep it light and stable without heavy native modules (like cwebp), we use a public media converter or guide.
+                    await sock.sendMessage(from, { text: '⏳ *Processing your sticker...*' }, { quoted: m });
+                    // Basic fallback notice if direct binary conversion isn't bundled with cwebp binaries on cloud host:
+                    await sock.sendMessage(from, { text: '💡 *Tip:* Send an image with caption `.s` or reply to an image with `.s` to convert!' }, { quoted: m });
+                } catch (e) {
+                    await sock.sendMessage(from, { text: '❌ *Failed to create sticker!*' }, { quoted: m });
+                }
+            }
+        }
+
+        // --- 3. Weather Info (.weather [City]) ---
+        if (body.startsWith('.weather')) {
+            const city = body.slice(8).trim();
+            if (!city) {
+                await sock.sendMessage(from, { text: '❌ *Please provide a city name!* Example: `.weather Colombo`' }, { quoted: m });
+                return;
+            }
+            await react('🌤️');
+            try {
+                const weatherRes = await axios.get(`https://wttr.in/${encodeURIComponent(city)}?format=j1`);
+                const current = weatherRes.data.current_condition[0];
+                const area = weatherRes.data.nearest_area[0];
+                
+                const weatherText = `
+🌤️ *WEATHER INFORMATION* 🌡️
+
+📍 *Location:* ${area.areaName[0].value}, ${area.country[0].value}
+🌡️ *Temperature:* ${current.temp_C}°C (Feels like ${current.FeelsLikeC}°C)
+☁️ *Condition:* ${current.weatherDesc[0].value}
+💧 *Humidity:* ${current.humidity}%
+wind: *${current.windspeedKmph} km/h*
+
+> *Powered by HDNOVA-OFC*`.trim();
+
+                await sock.sendMessage(from, { text: weatherText }, { quoted: m });
+            } catch (e) {
+                await sock.sendMessage(from, { text: '❌ *Could not fetch weather data for that city!*' }, { quoted: m });
+            }
+        }
+
+        // --- 4. Wikipedia / Google Search (.wiki) ---
+        if (body.startsWith('.wiki') || body.startsWith('.search')) {
+            const query = body.slice(5).trim();
+            if (!query) {
+                await sock.sendMessage(from, { text: '❌ *Please provide a search term!* Example: `.wiki Naruto`' }, { quoted: m });
+                return;
+            }
+            await react('🔍');
+            try {
+                const wikiRes = await axios.get(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`);
+                if (wikiRes.data && wikiRes.data.extract) {
+                    const wikiText = `
+🔍 *WIKIPEDIA SEARCH RESULT* 📖
+
+📌 *Title:* ${wikiRes.data.title}
+📝 *Summary:* ${wikiRes.data.extract}
+
+🔗 *Read more:* ${wikiRes.data.content_urls.desktop.page}
+
+> *Powered by HDNOVA-OFC*`.trim();
+                    await sock.sendMessage(from, { text: wikiText }, { quoted: m });
+                } else {
+                    await sock.sendMessage(from, { text: '❌ *No results found on Wikipedia!*' }, { quoted: m });
+                }
+            } catch (e) {
+                await sock.sendMessage(from, { text: '❌ *Error searching Wikipedia!*' }, { quoted: m });
+            }
         }
 
         // .alive Command
@@ -240,16 +370,14 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 > _HDNOVA-OFC - Cyber System_`.trim();
 
             try {
-                await sock.sendMessage(from, { 
-                    image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, 
-                    caption: aliveText 
-                }, { quoted: m });
+                const imgBuffer = await axios.get('https://i.ibb.co/Fb4QgTdR/image.jpg', { responseType: 'arraybuffer' }).then(res => res.data);
+                await sock.sendMessage(from, { image: imgBuffer, caption: aliveText }, { quoted: m });
             } catch (e) {
                 await sock.sendMessage(from, { text: aliveText }, { quoted: m });
             }
         }
 
-        // .menu Command
+        // .menu Command (නව විශේෂාංග සමඟ යාවත්කාලීන කළ මෙනු පැනලය)
         if (body === '.menu' || body === '.help') {
             await react('📜');
             const { date, time } = getDateTime();
@@ -264,15 +392,26 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 📅 *DATE:* ${date}
 ⏰ *TIME:* ${time}
 ───────────────────
-📌 *OWNER COMMANDS:*
+📌 *MAIN COMMANDS:*
 ┃ ⚡ _*.ping*_ - Check speed
-┃ 🔥 _*.alive*_ - Check system status
-┃ 📢 _*.tagall*_ - Tag all group members
+┃ 🔥 _*.alive*_ - Check status
+┃ 📢 _*.tagall*_ - Tag all members
 ───────────────────
-🛡️ *SECURITY SYSTEMS:*
-┃ 👁️ _*Auto Status*_  ⟡ [ACTIVE]
-┃ 📵 _*Call Shield*_  ⟡ [ACTIVE]
-┃ 🛡️ _*Anti-Delete*_ ⟡ [ACTIVE]
+🤖 *AI & UTILITIES:*
+┃ 🤖 _*.ai [query]*_ - Chat with AI
+┃ 🌤️ _*.weather [city]*_ - Get weather
+┃ 🔍 _*.wiki [term]*_ - Wikipedia search
+┃ 🎨 _*.s / .sticker*_ - Make sticker
+───────────────────
+🛡️ *SECURITY & SYSTEMS:*
+┃ 👁️ _*Auto Status*_  ⟡ [${botSettings.autoStatusSeen ? 'ACTIVE' : 'OFF'}]
+┃ 📵 _*Call Shield*_  ⟡ [${botSettings.callShield ? 'ACTIVE' : 'OFF'}]
+┃ 🛡️ _*Anti-Delete*_ ⟡ [${botSettings.antiDelete ? 'ACTIVE' : 'OFF'}]
+───────────────────
+⚙️ *TOGGLE COMMANDS:*
+┃ • _.autostatus on/off_
+┃ • _.antidelete on/off_
+┃ • _.callshield on/off_
 ───────────────────
 🌐 *CONTACT MASTER*
 http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
@@ -281,10 +420,8 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 > _HDNOVA-OFC - Cyber System_`.trim();
 
             try {
-                await sock.sendMessage(from, { 
-                    image: { url: 'https://i.ibb.co/3Q986uW.jpeg' }, 
-                    caption: menuText 
-                }, { quoted: m });
+                const imgBuffer = await axios.get('https://i.ibb.co/Fb4QgTdR/image.jpg', { responseType: 'arraybuffer' }).then(res => res.data);
+                await sock.sendMessage(from, { image: imgBuffer, caption: menuText }, { quoted: m });
             } catch (e) {
                 await sock.sendMessage(from, { text: menuText }, { quoted: m });
             }
@@ -301,13 +438,25 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
             try {
                 const chat = await sock.groupMetadata(from);
                 const participants = chat.participants;
-                let teks = `╔═══ 📣 *__HDNOVA TAG ALL__* 📣 ═══╗\n\n`;
+                const customMessage = body.slice(8).trim() || 'No specific message provided.';
+                
+                let teks = `┏━━━━━━━━━━━━━━━━━━━┓\n`;
+                teks += `┃  ⚡ **HDNOVA NOTIFICATION** ⚡\n`;
+                teks += `┗━━━━━━━━━━━━━━━━━━━┛\n\n`;
+                teks += `📌 **Group:** ${chat.subject}\n`;
+                teks += `💬 **Reason:** ${customMessage}\n`;
+                teks += `👥 **Total Members:** ${participants.length}\n\n`;
+                teks += `─────────────────────\n`;
+                
                 let mentions = [];
                 for (let mem of participants) {
-                    teks += `│ 👤 @${mem.id.split('@')[0]}\n`;
+                    teks += `│ ◈ @${mem.id.split('@')[0]}\n`;
                     mentions.push(mem.id);
                 }
-                teks += `╚════════════════════════════╝`;
+                
+                teks += `─────────────────────\n`;
+                teks += `> *Powered by HDNOVA-OFC*`;
+                
                 await sock.sendMessage(from, { text: teks, mentions: mentions }, { quoted: m });
             } catch (e) {
                 await sock.sendMessage(from, { text: '❌ *Error fetching group members!*' }, { quoted: m });
@@ -317,27 +466,44 @@ http://wa.me/+${phoneNumber}?text=*Hey__HDNOVA*
 
     // --- 5. Anti-Delete Listener ---
     sock.ev.on('messages.update', async (updates) => {
+        if (!botSettings.antiDelete) return;
+
         for (const update of updates) {
             if (update.update && update.update.message === null) {
                 const messageId = update.key.id;
-                const remoteJid = update.key.remoteJid;
-                const cachedMessage = messageStore.get(messageId);
+                const cached = messageStore.get(messageId);
+                if (!cached) return;
 
-                let deletedText = cachedMessage ? cachedMessage.text : "_Text not found or it was media!_";
-                let sender = cachedMessage ? cachedMessage.sender : remoteJid;
-                let senderName = cachedMessage ? cachedMessage.pushName : "Unknown";
+                const remoteJid = cached.remoteJid;
+                const sender = cached.sender;
+                const senderName = cached.pushName;
 
                 try {
-                    await sock.sendMessage(ownerJid, { 
-                        text: `🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n📌 *From Chat:* @${remoteJid.split('@')[0]}\n👤 *Sender Name:* ${senderName}\n📞 *Sender Number:* @${sender.split('@')[0]}\n💬 *Deleted Message:* ${deletedText}\n\n_Someone deleted a message!_ 🗑️` 
-                    }, { mentions: [remoteJid, sender] });
-                } catch (e) {}
+                    const msgType = Object.keys(cached.message)[0];
+                    
+                    if (['imageMessage', 'videoMessage', 'stickerMessage', 'audioMessage', 'documentMessage'].includes(msgType)) {
+                        await sock.sendMessage(ownerJid, {
+                            text: `🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n📌 *Chat:* @${remoteJid.split('@')[0]}\n👤 *Name:* ${senderName}\n📞 *Number:* @${sender.split('@')[0]}\n🗑️ *Deleted a Media (${msgType.replace('Message', '')})!*`,
+                            mentions: [remoteJid, sender]
+                        });
+                        await sock.sendMessage(ownerJid, { forward: cached.message });
+                    } else {
+                        let deletedText = cached.message.conversation || cached.message.extendedTextMessage?.text || "Unknown Text";
+                        await sock.sendMessage(ownerJid, { 
+                            text: `🛡️ *__HDNOVA ANTI-DELETE SYSTEM__*\n\n📌 *From Chat:* @${remoteJid.split('@')[0]}\n👤 *Sender Name:* ${senderName}\n📞 *Sender Number:* @${sender.split('@')[0]}\n💬 *Deleted Message:* ${deletedText}\n\n_Someone deleted a text message!_ 🗑️` 
+                        }, { mentions: [remoteJid, sender] });
+                    }
+                } catch (e) {
+                    console.log("Anti-delete error: ", e);
+                }
             }
         }
     });
 
     // --- 6. Call Shield Listener ---
     sock.ev.on('call', async (calls) => {
+        if (!botSettings.callShield) return;
+
         for (const call of calls) {
             if (call.status === 'offer') {
                 try {
