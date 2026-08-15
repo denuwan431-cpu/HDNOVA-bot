@@ -147,7 +147,7 @@ async function connectToWhatsApp() {
         return { date: now.toLocaleDateString('en-GB'), time: now.toLocaleTimeString('en-GB', { hour12: false }) };
     }
 
-    // --- 4. Message Upsert Listener (Commands, AI, Wiki, Stickers, Status Seen) ---
+    // --- 4. Message Upsert Listener ---
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message) return;
@@ -254,14 +254,20 @@ async function connectToWhatsApp() {
             return;
         }
 
-        // --- Sticker Maker (.s / .sticker) ---
-        if (body === '.sticker' || body === '.s' || m.message.imageMessage || m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) {
+        // --- Sticker Maker (.s / .sticker) - Fixed for Menu Issue ---
+        if (body === '.sticker' || body === '.s' || m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) {
             const isCmd = body === '.sticker' || body === '.s';
             const quotedMsg = m.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            if (isCmd || quotedMsg?.imageMessage || m.message.imageMessage) {
+            
+            if (isCmd || (quotedMsg && quotedMsg.imageMessage)) {
                 await react('🎨');
                 try {
                     let target = quotedMsg?.imageMessage ? { key: { remoteJid: from, id: m.message.extendedTextMessage.contextInfo.stanzaId }, message: quotedMsg } : m;
+                    
+                    if (!target.message.imageMessage && !target.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) {
+                        return;
+                    }
+
                     const buffer = await downloadMediaMessage(target, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage });
                     await sock.sendMessage(from, { sticker: buffer }, { quoted: m });
                 } catch (e) {
@@ -298,7 +304,7 @@ async function connectToWhatsApp() {
         }
     });
 
-    // --- 5. Anti-Delete Listener (Media, Stickers & Text) ---
+    // --- 5. Anti-Delete Listener ---
     sock.ev.on('messages.update', async (updates) => {
         if (!botSettings.antiDelete) return;
         for (const update of updates) {
